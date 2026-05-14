@@ -1,4 +1,135 @@
 import re
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+from llm_client import call_llm
+
+# Blocked operations
+BLOCKED_PATTERNS = [
+    r'\bDROP\b',
+    r'\bDELETE\b',
+    r'\bTRUNCATE\b',
+    r'\bALTER\b',
+    r'\bINSERT\b',
+    r'\bUPDATE\b',
+    r'\bGRANT\b',
+    r'\bREVOKE\b',
+    r'\bCREATE\s+TABLE\b',
+    r'\bCREATE\s+DATABASE\b',
+    r'\bTRUNCATE\b',
+]
+
+
+def validate_and_fix(sql, schema):
+    """
+    Validate and fix SQL query with security checks and schema validation.
+
+    Returns: {
+        valid: bool,
+        sql: str (fixed or original),
+        blocked: bool,
+        reason: str or None,
+        guardrail_events: list
+    }
+    """
+    guardrail_events = []
+    current_sql = sql.strip()
+
+    # Check for destructive operations
+    for pattern in BLOCKED_PATTERNS:
+        if re.search(pattern, current_sql, re.IGNORECASE):
+            return {
+                "valid": False,
+                "sql": current_sql,
+                "blocked": True,
+                "reason": "Destructive operation blocked",
+                "guardrail_events": [{
+                    "type": "blocked",
+                    "action": "REJECTED",
+                    "detail": f"Pattern '{pattern}' matched - destructive operation not allowed"
+                }]
+            }
+
+    guardrail_events.append({
+        "type": "info",
+        "action": "PASSED",
+        "detail": "Security check passed - no destructive operations detected"
+    })
+
+    # Check for missing LIMIT
+    if not re.search(r'\bLIMIT\b', current_sql, re.IGNORECASE):
+        current_sql = f"{current_sql} LIMIT 1000"
+        guardrail_events.append({
+            "type": "corrected",
+            "action": "AUTO_FIXED",
+            "detail": "Added LIMIT 1000 to prevent unbounded queries"
+        })
+
+    # Validate schema consistency
+    schema_check = check_schema_consistency(current_sql, schema)
+    if not schema_check["valid"]:
+        fixed_sql = auto_fix_sql(current_sql, schema)
+        if fixed_sql != current_sql:
+            current_sql = fixed_sql
+            guardrail_events.append({
+                "type": "corrected",
+                "action": "AUTO_FIXED",
+                "detail": "Schema inconsistencies corrected via LLM"
+            })
+
+    return {
+        "valid": True,
+        "sql": current_sql,
+        "blocked": False,
+        "reason": None,
+        "guardrail_events": guardrail_events
+    }
+
+
+def check_schema_consistency(sql, schema):
+    """Check if table and column names exist in schema"""
+    if "tables" not in schema:
+        return {"valid": True}
+
+    tables = schema["tables"]
+    table_pattern = r'FROM\s+(\w+)|JOIN\s+(\w+)'
+    referenced_tables = re.findall(table_pattern, sql, re.IGNORECASE)
+    referenced_tables = [t[0] or t[1] for t in referenced_tables]
+
+    for table in referenced_tables:
+        if table.lower() not in [t.lower() for t in tables.keys()]:
+            return {"valid": False, "error": f"Table '{table}' not found in schema"}
+
+    return {"valid": True}
+
+
+def auto_fix_sql(sql, schema):
+    """Use LLM to fix SQL with schema issues"""
+    schema_desc = "Available tables and columns:\n"
+    if "tables" in schema:
+        for table, info in schema["tables"].items():
+            schema_desc += f"\nTable: {table}\n"
+            if "columns" in info:
+                for col in info["columns"]:
+                    schema_desc += f"  - {col['name']} ({col.get('type', 'unknown')})\n"
+
+    prompt = f"""You are a SQL corrector. The user wrote this SQL:
+{sql}
+
+Fix the SQL to use correct table and column names from the schema below.
+Schema:
+{schema_desc}
+
+Return ONLY the corrected SQL. No explanation. No markdown. No backticks."""
+
+    try:
+        result = call_llm(prompt)
+        return result.strip()
+    except Exception as e:
+        print(f"Error auto-fixing SQL: {e}")
+        return sql
+
 
 def enforce_user_constraints(sql: str, question: str) -> str:
     """
