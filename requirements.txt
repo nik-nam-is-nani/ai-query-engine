@@ -1,6 +1,9 @@
-# AI SQL Studio - Requirements
-flask>=2.0.0
-flask-cors>=3.0.0
-mysql-connector-python>=8.0.0
-requests>=2.28.0
-joblib>=1.0.0
+# AI SQL Studio - Backend Requirements
+flask==3.0.0
+flask-cors==4.0.0
+python-dotenv==1.0.0
+mysql-connector-python==8.3.0
+psycopg2-binary==2.9.9
+pandas==2.2.0
+requests==2.31.0
+openai==1.12.0

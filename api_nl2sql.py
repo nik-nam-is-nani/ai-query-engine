@@ -190,5 +190,78 @@ def test_api_connection():
         return False
 
 
+# =============================
+# 🎯 NEW NL2SQL API ENDPOINT HANDLER
+# =============================
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+from llm_client import call_llm
+from connector_manager import get_schema
+from xai_engine import generate_explanation
+from sql_guard import validate_and_fix
+
+
+def generate_sql(nl_query, source_id, schema=None):
+    """
+    Convert natural language query to SQL.
+
+    Returns: { sql, explanation, guardrail_events }
+    """
+    # Get schema if not provided
+    if schema is None:
+        schema = get_schema(source_id)
+
+    # Build schema description
+    schema_str = ""
+    if "tables" in schema:
+        for table, info in schema["tables"].items():
+            schema_str += f"\nTable: {table}\n"
+            if "columns" in info:
+                for col in info["columns"]:
+                    schema_str += f"  - {col['name']} ({col.get('type', 'unknown')})\n"
+
+    prompt = f"""You are an expert SQL generator. Given the following database schema:
+{schema_str}
+Convert this natural language query to valid SQL:
+"{nl_query}"
+Return ONLY the SQL query. No explanation. No markdown. No backticks."""
+
+    try:
+        sql = call_llm(prompt)
+
+        # Clean up SQL
+        sql = sql.strip().strip('```').strip()
+
+        # Generate explanation
+        explanation = generate_explanation(nl_query, sql, schema)
+
+        # Validate and fix SQL
+        validation = validate_and_fix(sql, schema)
+        if not validation["valid"]:
+            return {
+                "sql": sql,
+                "explanation": explanation,
+                "guardrail_events": validation["guardrail_events"],
+                "error": validation["reason"]
+            }
+
+        return {
+            "sql": validation["sql"],
+            "explanation": explanation,
+            "guardrail_events": validation["guardrail_events"]
+        }
+
+    except Exception as e:
+        print(f"Error generating SQL: {e}")
+        return {
+            "sql": "",
+            "explanation": {},
+            "guardrail_events": [],
+            "error": str(e)
+        }
+
+
 if __name__ == "__main__":
     test_api_connection()
