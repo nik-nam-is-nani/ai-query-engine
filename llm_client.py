@@ -14,6 +14,24 @@ load_dotenv(override=True)
 _last_model_used = None
 _fallback_triggered = False
 
+# Runtime API key storage (set by user via UI)
+RUNTIME_API_KEY = None
+
+
+def set_api_key(key):
+    """Set API key at runtime (from UI input)"""
+    global RUNTIME_API_KEY
+    RUNTIME_API_KEY = key
+    print(f"[LLM] API key updated via UI")
+
+
+def get_api_key():
+    """Get API key - prefer runtime over env"""
+    if RUNTIME_API_KEY:
+        return RUNTIME_API_KEY
+    return os.getenv("OPENROUTER_API_KEY")
+
+
 def call_llm(prompt, system_prompt=None, json_mode=False):
     """
     Unified LLM call function with OpenRouter primary and OpenAI fallback.
